@@ -1,0 +1,183 @@
+var canvas, gl;
+
+var numVertices = 36;   
+
+var points = [];
+var colors = [];
+
+var movement = false;
+var spinX = 0, spinY = 0;
+var origX = 0, origY = 0;
+
+var matrixLoc;
+
+var L = 1.0;                  
+var rodW = 0.05, rodD = 0.05; 
+var bobSize = 0.20;           
+
+//fastur punktar til að snúa um
+var leftPivot  = vec3(-0.1, 0.6, 0.0);
+var rightPivot = vec3(0.1, 0.6, 0.0);
+
+
+var thetaL =  45.0; 
+var thetaR =    0.0;  
+var dirL   =   -1;    
+var dirR   =    0;    
+var active = "left";
+
+var omegaDeg = 60.0;   
+var lastTime = 0;
+
+window.onload = function init() {
+  canvas = document.getElementById("gl-canvas");
+  gl = WebGLUtils.setupWebGL(canvas);
+  if (!gl) { alert("WebGL isn't available"); return; }
+
+  colorCube();
+
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(1.0, 1.0, 1.0, 1.0);
+  gl.enable(gl.DEPTH_TEST);
+
+  var program = initShaders(gl, "vertex-shader", "fragment-shader");
+  gl.useProgram(program);
+
+  var cBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, cBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, flatten(colors), gl.STATIC_DRAW);
+  var vColor = gl.getAttribLocation(program, "vColor");
+  gl.vertexAttribPointer(vColor, 4, gl.FLOAT, false, 0, 0);
+  gl.enableVertexAttribArray(vColor);
+
+  var vBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, flatten(points), gl.STATIC_DRAW);
+  var vPosition = gl.getAttribLocation(program, "vPosition");
+  gl.vertexAttribPointer(vPosition, 3, gl.FLOAT, false, 0, 0);
+  gl.enableVertexAttribArray(vPosition);
+
+  matrixLoc = gl.getUniformLocation(program, "transform");
+
+  canvas.addEventListener("mousedown", function(e){
+    movement = true;
+    origX = e.offsetX;
+    origY = e.offsetY;
+    e.preventDefault();
+  });
+  canvas.addEventListener("mouseup", function(){ movement = false; });
+  canvas.addEventListener("mousemove", function(e){
+    if (movement) {
+      spinY = (spinY + (origX - e.offsetX)) % 360;
+      spinX = (spinX + (origY - e.offsetY)) % 360;
+      origX = e.offsetX;
+      origY = e.offsetY;
+    }
+  });
+
+  render();
+};
+
+function colorCube() {
+  quad( 1, 0, 3, 2 );
+  quad( 2, 3, 7, 6 );
+  quad( 3, 0, 4, 7 );
+  quad( 6, 5, 1, 2 );
+  quad( 4, 5, 6, 7 );
+  quad( 5, 4, 0, 1 );
+}
+function quad(a, b, c, d) {
+  var vertices = [
+    vec3( -0.5, -0.5,  0.5 ),
+    vec3( -0.5,  0.5,  0.5 ),
+    vec3(  0.5,  0.5,  0.5 ),
+    vec3(  0.5, -0.5,  0.5 ),
+    vec3( -0.5, -0.5, -0.5 ),
+    vec3( -0.5,  0.5, -0.5 ),
+    vec3(  0.5,  0.5, -0.5 ),
+    vec3(  0.5, -0.5, -0.5 )
+  ];
+  var vertexColors = [
+    [ 0.0, 0.0, 0.0, 1.0 ],  // black
+    [ 1.0, 0.0, 0.0, 1.0 ],  // red
+    [ 1.0, 1.0, 0.0, 1.0 ],  // yellow
+    [ 0.0, 1.0, 0.0, 1.0 ],  // green
+    [ 0.0, 0.0, 1.0, 1.0 ],  // blue
+    [ 1.0, 0.0, 1.0, 1.0 ],  // magenta
+    [ 0.0, 1.0, 1.0, 1.0 ],  // cyan
+    [ 1.0, 1.0, 1.0, 1.0 ]   // white
+  ];
+  var indices = [ a, b, c, a, c, d ];
+  for (var i = 0; i < indices.length; ++i) {
+    points.push(vertices[indices[i]]);
+    colors.push(vertexColors[a]); 
+  }
+}
+
+function drawPendulum(baseMV, pivot, thetaDeg) {
+  var mRod = mult(baseMV, translate(pivot[0], pivot[1], pivot[2]));
+  mRod = mult(mRod, rotateZ(-thetaDeg));        
+  mRod = mult(mRod, translate(0, -L/2, 0));    
+  mRod = mult(mRod, scalem(rodW, L, rodD));
+  gl.uniformMatrix4fv(matrixLoc, false, flatten(mRod));
+  gl.drawArrays(gl.TRIANGLES, 0, numVertices);
+
+  var mBob = mult(baseMV, translate(pivot[0], pivot[1], pivot[2]));
+  mBob = mult(mBob, rotateZ(-thetaDeg));
+  mBob = mult(mBob, translate(0, -L, 0));
+  mBob = mult(mBob, scalem(bobSize, bobSize, bobSize));
+  gl.uniformMatrix4fv(matrixLoc, false, flatten(mBob));
+  gl.drawArrays(gl.TRIANGLES, 0, numVertices);
+}
+
+function updateAngles() {
+  var now = performance.now(); //tími sem síðan hefur verið í gangi
+  if (!lastTime) lastTime = now; 
+  var dt = (now - lastTime) / 1000.0; //tími liðinn frá því var kallað á fall
+  lastTime = now;
+
+  var dth = omegaDeg * dt; //Þarf að fara 60°/s finna hversu mikið skal hreyfa
+
+  if (active === "left") {
+    thetaL += dirL * dth; // minnka hornið um 60°/sek ef pendúll á að hreyfast
+
+    if (thetaL > 45)  {  //ef pendúll er farinn of langt, fara á byrjun og skipta um stefnu
+        thetaL = 45;
+        dirL = -1; 
+    } 
+    if (thetaL <= 0 && dirL < 0) { //skipta um aktívan pendúl
+      thetaL = 0; 
+      dirL = 0;
+      thetaR = 0;
+       dirR = -1;      
+      active = "right";
+    }
+  } else { 
+    thetaR += dirR * dth;
+
+    if (thetaR < -45) { thetaR = -45; dirR = +1; }
+    if (thetaR >= 0 && dirR > 0) {
+      thetaR = 0; 
+      dirR = 0;
+      thetaL = 0; 
+      dirL = +1;       
+      active = "left";
+    }
+  }
+}
+
+
+function render() {
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  var mv = mat4();
+  mv = mult(mv, rotateX(spinX));
+  mv = mult(mv, rotateY(spinY));
+
+  drawPendulum(mv, leftPivot,  thetaL);
+  drawPendulum(mv, rightPivot, thetaR);
+
+  updateAngles();
+
+  requestAnimFrame(render);
+}
